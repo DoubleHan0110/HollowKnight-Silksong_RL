@@ -1,0 +1,10 @@
+python==3.10
+yacs
+tensorboardX
+tensorboard
+moviepy
+colorama
+einops
+tqdm
+opencv-python
+gymnasium[atari,accept-rom-license]

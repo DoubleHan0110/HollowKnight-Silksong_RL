@@ -1,0 +1,182 @@
+# game_event_client.py
+import requests
+import threading
+import time
+import socket
+from typing import List, Dict, Optional
+from collections import deque
+from fastapi import FastAPI
+import uvicorn
+
+class ModEventClient:
+    """
+    游戏事件客户端，用于从 FastAPI 服务器获取游戏事件
+    """
+    
+    def __init__(self, base_url: str = "http://127.0.0.1:9393/", last_check_time: float = 0.0):
+        """
+        初始化游戏事件客户端
+        
+        :param base_url: FastAPI 服务器地址
+        :param start_server: 是否启动 FastAPI 服务器（如果为 True，会在后台线程启动）
+        """
+        self.base_url = base_url
+        self.last_check_time = last_check_time
+        self.server_thread = None
+        
+        self._start_server()
+    
+    def _start_server(self):
+        """在后台线程启动 FastAPI 服务器"""
+        # 避免重复启动服务器
+        try:
+            response = requests.get(f"{self.base_url}/get_events", params={"last_check_time": 0.0}, timeout=0.1)
+            if response.status_code == 200:
+                print("ModEventClient server already running, reusing existing server")
+                return
+        except:
+            pass  
+        
+        app = FastAPI()
+        
+        # 事件队列
+        hit_events = deque(maxlen=500)
+        damage_events = deque(maxlen=500)
+        boss_hp_events = deque(maxlen=500)
+        
+        # @app.get("/soul_gain/{amount}")
+        # async def soul_gain(amount: int):
+        #     return "OK"
+        
+        @app.get("/hit/{entity_name}/{damage}/{remaining_hp}")
+        async def hit(entity_name: str, damage: int, remaining_hp: int):
+            hit_events.append({
+                "entity": entity_name,
+                "damage": damage,
+                "boss_hp": remaining_hp,
+                "time": time.time()
+            })
+            return "OK"
+        
+        @app.get("/take_hit/{hazard_type}/{damage}/{remaining_hp}")
+        async def take_hit(hazard_type: str, damage: int, remaining_hp: int):
+            damage_events.append({
+                "hazard_type": hazard_type,
+                "damage": damage,
+                "hornet_hp": remaining_hp,
+                "time": time.time()
+            })
+            return "OK"
+
+        @app.get("boss_hp/{enemyName}/{hp}")
+        async def boss_hp(enemyName: str, hp: int):
+            boss_hp_events.append({
+                "enemyName": enemyName,
+                "hp": hp,
+                "time": time.time()
+            })
+            return "OK"
+        
+        @app.get("/get_events")
+        async def get_events(last_check_time: float = 0.0, end_time: float | None = None):
+            now = time.time()
+            hi = end_time if end_time is not None else now
+            new_hits = [e for e in hit_events if (e["time"] > last_check_time and e["time"] <= hi)]
+            new_damages = [e for e in damage_events if (e["time"] > last_check_time and e["time"] <= hi)]
+            new_boss_hp = [e for e in boss_hp_events if (e["time"] > last_check_time and e["time"] <= hi)]
+
+            return {
+                "hits": new_hits,
+                "damages": new_damages,
+                "boss_hp": new_boss_hp,
+                "current_time": now
+            }
+
+        
+        @app.post("/clear_events")
+        async def clear_events():
+            hit_events.clear()
+            damage_events.clear()
+            boss_hp_events.clear()
+            return "OK"
+        
+        # 后台启动服务器
+        def run_server():
+            try:
+                uvicorn.run(
+                    app,
+                    host="127.0.0.1",
+                    port=9393,
+                    log_level="warning",
+                    access_log=False,
+                    loop="asyncio"
+                )
+            except OSError as e:
+                if "address already in use" in str(e).lower() or "通常每个套接字地址" in str(e):
+                    print("ModEventClient server port 9393 already in use, reusing existing server")
+                else:
+                    raise
+        
+        self.server_thread = threading.Thread(target=run_server, daemon=True)
+        self.server_thread.start()
+        time.sleep(1) 
+    
+    def get_events_since_last_check(self, current_time: float = None) -> Dict:
+        """
+        获取自上次check以来的新事件
+        
+        :return: 包含 hits 和 damages 的字典
+        """
+        query_time = self.last_check_time
+        try:
+            response = requests.get(
+                f"{self.base_url}/get_events",
+                params={"last_check_time": query_time, "end_time": current_time},
+                timeout=0.1
+            )
+            if response.status_code == 200:
+                data = response.json()
+                self.last_check_time = current_time
+                return data
+        except Exception as e:
+            print(f"获取事件失败: {e}")
+        
+        return {"hits": [], "damages": [], "boss_hp": [], "current_time": time.time()}
+    
+    def reset(self, last_check_time: float = None):
+        """重置事件检查时间（用于 reset）"""
+        if last_check_time is not None:
+            self.last_check_time = last_check_time
+        else:
+            self.last_check_time = time.time()
+
+        self._clear_events()
+    
+    def _clear_events(self):
+        """清除所有事件（用于 reset）"""
+        try:
+            requests.post(f"{self.base_url}/clear_events", timeout=0.1)
+        except Exception as e:
+            print(f"清除事件失败: {e}")
+    
+    
+
+if __name__ == "__main__":
+    mod_event_client = ModEventClient()
+    mod_event_client.reset()
+    print("等待游戏事件...（请确保游戏 Mod 正在运行）")
+    current_time = time.time()
+    
+    while True:
+        time.sleep(0.1)  # 每 0.1 秒检查一次
+        current_time = time.time()
+        events = mod_event_client.get_events_since_last_check(current_time)
+        
+        # 检查是否有实际事件（不是空列表）
+        if events["hits"]:
+            print(f"hits: {events['hits']}")
+        if events["damages"]:
+            print(f"damages: {events['damages']}")
+        if events["boss_hp"]:
+            print(f"boss_hp: {events['boss_hp']}")
+
