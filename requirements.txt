@@ -1,4 +1,9 @@
-python==3.10
+# Python 3.10 is recommended.
+
+torch
+torchvision
+torchaudio
+numpy
 yacs
 tensorboardX
 tensorboard
@@ -8,3 +13,14 @@ einops
 tqdm
 opencv-python
 gymnasium[atari,accept-rom-license]
+
+# Real-game window capture and control.
+dxcam
+pygetwindow
+pyautogui
+keyboard
+
+# Mod event bridge / local HTTP service.
+requests
+fastapi
+uvicorn[standard]
